@@ -252,9 +252,7 @@ foreach ($school_bells as $school_bell) {
 
 	if (!school_bell_valid_destination($school_bell['extension'])
         || !school_bell_valid_context($school_bell['context'])
-        || !is_string($school_bell['full_path'])
-        || preg_match('/[\r\n(),\\\s]/', $school_bell['full_path'])
-        || strpos($school_bell['full_path'], '..') !== false) {
+        || !school_bell_valid_recording_path($school_bell['full_path'])) {
         sb3_record_history($sb3_history_stmt,$school_bell,$local,'request_error','Bell destination or recording is invalid');
         error_log('School Bells rejected invalid command data for schedule '.$school_bell['school_bell_uuid']);
         continue;

@@ -25,3 +25,10 @@ function school_bell_valid_recording_filename($value) {
 		&& strpos($value, "\\") === false
 		&& preg_match('/^[A-Za-z0-9._\/-]+$/D', $value) === 1;
 }
+
+function school_bell_valid_recording_path($value) {
+	return is_string($value)
+		&& strlen($value) <= 1024
+		&& strpos($value, '..') === false
+		&& preg_match('~^/[A-Za-z0-9._/+:-]+$~D', $value) === 1;
+}

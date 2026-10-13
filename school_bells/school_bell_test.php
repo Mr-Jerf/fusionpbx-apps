@@ -47,11 +47,7 @@ if (!$school_bell) {
 if (!school_bell_valid_destination($school_bell['extension'])
 	|| !school_bell_valid_context($school_bell['context'])
 	|| !school_bell_valid_recording_filename($school_bell['recording_filename'])
-	|| !is_string($school_bell['full_path'])
-	|| strpos($school_bell['full_path'], "\r") !== false
-	|| strpos($school_bell['full_path'], "\n") !== false
-	|| strpos($school_bell['full_path'], '..') !== false
-	|| preg_match('/[(),\\s]/', $school_bell['full_path'])) {
+	|| !school_bell_valid_recording_path($school_bell['full_path'])) {
 	message::add('Bell destination or recording is invalid.');
 	header('Location: school_bells.php');
 	exit;
