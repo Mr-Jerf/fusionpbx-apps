@@ -80,6 +80,7 @@ if (isset($db) && $db instanceof PDO && $db->getAttribute(PDO::ATTR_DRIVER_NAME)
 $school_bells = $database->select($sql, null, 'all');
 
 if (!is_array($school_bells) || count($school_bells) === 0) {
+	error_log('School Bells scheduler loaded no enabled bell times');
 	if ($debug) {
 		echo "no enabled bell times\n";
 	}
@@ -109,6 +110,7 @@ $freeswitch_event_socket = event_socket_create(
 );
 
 if (!$freeswitch_event_socket) {
+	error_log('School Bells scheduler could not connect to Event Socket');
 	die("Cannot connect to Event socket");
 }
 
@@ -296,6 +298,7 @@ foreach ($school_bells as $school_bell) {
     try {
         $reply=event_socket_request($freeswitch_event_socket, $switch_cmd);
         $failed=($reply === false || (is_string($reply) && strpos($reply,'-ERR') !== false));
+        if ($failed) error_log('School Bells Event Socket response: '.substr((string)$reply, 0, 240));
         sb3_finish_slot($db,$school_bell,$local,$failed?'request_error':'submitted',$failed?'Event socket rejected or failed':'FreeSWITCH request submitted; playback not verified');
     } catch (Throwable $e) {
         sb3_finish_slot($db,$school_bell,$local,'request_error','Event socket request threw an error');
