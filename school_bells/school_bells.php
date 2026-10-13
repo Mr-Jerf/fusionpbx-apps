@@ -320,7 +320,7 @@ foreach ($result as $row) {
 			</td>
 
 			<td class="<?php echo $row_style[$c]; ?>">
-				<?php echo escape($row['school_bell_name']); ?>&nbsp;
+				<a href="school_bell_edit.php?id=<?php echo escape($id); ?>"><?php echo escape($row['school_bell_name']); ?></a>&nbsp;
 			</td>
 
 			<td class="<?php echo $row_style[$c]; ?>">
