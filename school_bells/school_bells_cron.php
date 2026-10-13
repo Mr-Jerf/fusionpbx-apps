@@ -14,7 +14,7 @@ else {
 	die('access denied');
 }
 
-$debug = false;
+$debug = getenv('SCHOOL_BELLS_DEBUG') === '1';
 set_time_limit(55);
 $current_timestamp = time();
 
@@ -68,6 +68,8 @@ register_shutdown_function(function () use ($school_bell_lock_handle) {
 // the FusionPBX database API so history and duplicate prevention also work in CLI.
 
 $school_bells = $database->select($sql, null, 'all');
+
+if ($debug) echo "loaded bell rows: ".(is_array($school_bells) ? count($school_bells) : -1)."\\n";
 
 if (!is_array($school_bells) || count($school_bells) === 0) {
 	error_log('School Bells scheduler loaded no enabled bell times');
@@ -215,6 +217,8 @@ foreach ($school_bells as $school_bell) {
 	$current_minute = (int)$local->format('i');
 
 	$day_field = $day_fields[$current_dow];
+
+	if ($debug) echo "row ".$school_bell['school_bell_name']." now=".$local->format('Y-m-d H:i:s T')." slot=".(int)$school_bell['hour'].":".(int)$school_bell['minute']." day=".$day_field."\\n";
 
 	if (!school_bell_cron_true($school_bell[$day_field])) {
 		continue;
