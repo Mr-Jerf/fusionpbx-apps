@@ -64,18 +64,8 @@ register_shutdown_function(function () use ($school_bell_lock_handle) {
 	}
 });
 
-$school_bell_advisory_lock = false;
-if (isset($db) && $db instanceof PDO && $db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql') {
-	$lock_stmt = $db->query("SELECT pg_try_advisory_lock(hashtext('fusionpbx-school-bells-scheduler'))");
-	$school_bell_advisory_lock = (bool)$lock_stmt->fetchColumn();
-	if (!$school_bell_advisory_lock) {
-		if ($debug) echo "scheduler database lock is held\n";
-		return;
-	}
-	register_shutdown_function(function () use ($db) {
-		$db->query("SELECT pg_advisory_unlock(hashtext('fusionpbx-school-bells-scheduler'))");
-	});
-}
+// The host-local filesystem lock protects this invocation. Slot claims below use
+// the FusionPBX database API so history and duplicate prevention also work in CLI.
 
 $school_bells = $database->select($sql, null, 'all');
 
@@ -143,29 +133,29 @@ function school_bell_exception_matches($exception, $schedule_uuid, $local_date) 
     return $local_date >= $start && $local_date <= $end;
 }
 
-// Logging is best-effort. A logging outage must never prevent a scheduled bell.
-// History records FreeSWITCH command submission, not confirmation that speakers played audio.
-try {
-    require_once "resources/pdo.php";
-    $sb3_history_stmt = (isset($db) && $db instanceof PDO)
-        ? $db->prepare("INSERT INTO v_school_bell_history (school_bell_history_uuid,domain_uuid,school_bell_uuid,schedule_name,scheduled_local_date,scheduled_local_time,schedule_timezone,decision,detail,created_at) VALUES (:uuid,:domain,:schedule,:name,:local_date,:local_time,:timezone,:decision,:detail,:created_at)")
-        : null;
-} catch (Throwable $e) {
-    error_log('School Bells history initialization failed: '.$e->getMessage());
-    $sb3_history_stmt = null;
+function sb3_execute_dml($database,$sql,$parameters) {
+    $result = $database->execute($sql, $parameters);
+    if ($result !== false) return 'success';
+    $message = is_array($database->message ?? null) ? (string)($database->message['message'] ?? '') : '';
+    if (preg_match('/no results? to fetch|no results? were returned/i', $message)) return 'success';
+    if (preg_match('/duplicate|unique constraint|already exists|23505/i', $message)) return 'duplicate';
+    error_log('School Bells database write failed: '.substr($message, 0, 240));
+    return 'error';
 }
-function sb3_record_history($stmt,$bell,$local,$decision,$detail='') {
-    if (!$stmt) return;
+
+function sb3_record_history($database,$bell,$local,$decision,$detail='') {
+    if (!isset($database) || !is_object($database)) return false;
     try {
         $uuid=sprintf('%s-%s-%s-%s-%s',bin2hex(random_bytes(4)),bin2hex(random_bytes(2)),'4'.substr(bin2hex(random_bytes(2)),1),dechex((hexdec(substr(bin2hex(random_bytes(2)),0,1)) & 3) | 8).substr(bin2hex(random_bytes(2)),1),bin2hex(random_bytes(6)));
-        $stmt->execute([
+        $status = sb3_execute_dml($database, "INSERT INTO v_school_bell_history (school_bell_history_uuid,domain_uuid,school_bell_uuid,schedule_name,scheduled_local_date,scheduled_local_time,schedule_timezone,decision,detail,created_at) VALUES (:uuid,:domain,:schedule,:name,:local_date,:local_time,:timezone,:decision,:detail,:created_at)", [
             ':uuid'=>$uuid, ':domain'=>$bell['domain_uuid'], ':schedule'=>$bell['school_bell_uuid'],
             ':name'=>$bell['school_bell_name'], ':local_date'=>$local->format('Y-m-d'),
             ':local_time'=>$local->format('H:i:s'), ':timezone'=>$local->getTimezone()->getName(),
-            ':decision'=>$decision, ':detail'=>$detail,
-            ':created_at'=>gmdate('Y-m-d H:i:s')
+            ':decision'=>$decision, ':detail'=>$detail, ':created_at'=>gmdate('Y-m-d H:i:s')
         ]);
-    } catch (Throwable $e) { error_log('School Bells history insert failed: '.$e->getMessage()); }
+        if ($status !== 'success') throw new RuntimeException('history insert failed: '.$status);
+        return true;
+    } catch (Throwable $e) { error_log('School Bells history insert failed: '.$e->getMessage()); return false; }
 }
 
 function sb3_slot_uuid($bell,$local) {
@@ -173,30 +163,30 @@ function sb3_slot_uuid($bell,$local) {
     $hex = substr(hash('sha256', $bell['domain_uuid'].'|'.$bell['school_bell_uuid'].'|'.$slot), 0, 32);
     return substr($hex,0,8).'-'.substr($hex,8,4).'-4'.substr($hex,13,3).'-8'.substr($hex,17,3).'-'.substr($hex,20,12);
 }
-function sb3_claim_slot($db,$bell,$local) {
-    if (!$db instanceof PDO) return true;
+function sb3_claim_slot($database,$bell,$local) {
+    if (!isset($database) || !is_object($database)) return false;
     $uuid = sb3_slot_uuid($bell,$local);
     try {
-        $claim = $db->prepare("INSERT INTO v_school_bell_history (school_bell_history_uuid,domain_uuid,school_bell_uuid,schedule_name,scheduled_local_date,scheduled_local_time,schedule_timezone,decision,detail,created_at) VALUES (:uuid,:domain,:schedule,:name,:local_date,:local_time,:timezone,'claimed','Scheduler slot claimed',:created_at)");
-        $claim->execute([
+        $status = sb3_execute_dml($database, "INSERT INTO v_school_bell_history (school_bell_history_uuid,domain_uuid,school_bell_uuid,schedule_name,scheduled_local_date,scheduled_local_time,schedule_timezone,decision,detail,created_at) VALUES (:uuid,:domain,:schedule,:name,:local_date,:local_time,:timezone,'claimed','Scheduler slot claimed',:created_at)", [
             ':uuid'=>$uuid, ':domain'=>$bell['domain_uuid'], ':schedule'=>$bell['school_bell_uuid'],
             ':name'=>$bell['school_bell_name'], ':local_date'=>$local->format('Y-m-d'),
             ':local_time'=>$local->format('H:i:s'), ':timezone'=>$local->getTimezone()->getName(),
             ':created_at'=>gmdate('Y-m-d H:i:s')
         ]);
-        return true;
+        return $status;
     } catch (Throwable $e) {
-        // The deterministic primary key makes this an atomic cross-process claim.
         return false;
     }
 }
-function sb3_finish_slot($db,$bell,$local,$decision,$detail='') {
-    if (!$db instanceof PDO) return;
+function sb3_finish_slot($database,$bell,$local,$decision,$detail='') {
+    if (!isset($database) || !is_object($database)) return false;
     $uuid = sb3_slot_uuid($bell,$local);
     try {
-        $update = $db->prepare('UPDATE v_school_bell_history SET decision=:decision, detail=:detail WHERE school_bell_history_uuid=:uuid');
-        $update->execute([':decision'=>$decision, ':detail'=>$detail, ':uuid'=>$uuid]);
-    } catch (Throwable $e) { error_log('School Bells history update failed: '.$e->getMessage()); }
+        $status = sb3_execute_dml($database, 'UPDATE v_school_bell_history SET decision=:decision, detail=:detail WHERE school_bell_history_uuid=:uuid', ['decision'=>$decision, 'detail'=>$detail, 'uuid'=>$uuid]);
+        if ($status !== 'success') return false;
+        $row = $database->select('SELECT decision, detail FROM v_school_bell_history WHERE school_bell_history_uuid=:uuid', ['uuid'=>$uuid], 'row');
+        return is_array($row) && $row['decision'] === $decision && $row['detail'] === $detail;
+    } catch (Throwable $e) { error_log('School Bells history update failed: '.$e->getMessage()); return false; }
 }
 
 $day_fields = [
@@ -240,7 +230,7 @@ foreach ($school_bells as $school_bell) {
 
     $local_date = $local->format('Y-m-d');
     if (isset($pause_lookup[$school_bell['domain_uuid']][$school_bell['school_bell_uuid']][$local_date])) {
-        sb3_record_history($sb3_history_stmt,$school_bell,$local,'skipped_pause','Skip Today');
+        sb3_record_history($database,$school_bell,$local,'skipped_pause','Skip Today');
         if ($debug) echo "Skipped paused schedule: ".$school_bell['school_bell_name']." (".$local_date.")\n";
         continue;
     }
@@ -253,7 +243,7 @@ foreach ($school_bells as $school_bell) {
         }
     }
     if ($excepted) {
-        sb3_record_history($sb3_history_stmt,$school_bell,$local,'skipped_exception','Calendar exception');
+        sb3_record_history($database,$school_bell,$local,'skipped_exception','Calendar exception');
         if ($debug) echo "Skipped calendar exception: ".$school_bell['school_bell_name']." (".$local_date.")\n";
         continue;
     }
@@ -271,13 +261,18 @@ foreach ($school_bells as $school_bell) {
 	if (!school_bell_valid_destination($school_bell['extension'])
         || !school_bell_valid_context($school_bell['context'])
         || !school_bell_valid_recording_path($school_bell['full_path'])) {
-        sb3_record_history($sb3_history_stmt,$school_bell,$local,'request_error','Bell destination or recording is invalid');
+        sb3_record_history($database,$school_bell,$local,'request_error','Bell destination or recording is invalid');
         error_log('School Bells rejected invalid command data for schedule '.$school_bell['school_bell_uuid']);
         continue;
     }
 
-    if (!sb3_claim_slot($db, $school_bell, $local)) {
-        if ($debug) echo "Already claimed: ".$school_bell['school_bell_name']." (".$local_date." ".$local->format('H:i').")\n";
+    $claim_status = sb3_claim_slot($database, $school_bell, $local);
+    if ($claim_status !== 'success') {
+        if ($claim_status === 'duplicate') {
+            if ($debug) echo "Already claimed: ".$school_bell['school_bell_name']." (".$local_date." ".$local->format('H:i').")\n";
+        } else {
+            error_log('School Bells could not claim scheduler slot for '.$school_bell['school_bell_uuid']);
+        }
         continue;
     }
 
@@ -299,9 +294,9 @@ foreach ($school_bells as $school_bell) {
         $reply=event_socket_request($freeswitch_event_socket, $switch_cmd);
         $failed=($reply === false || (is_string($reply) && strpos($reply,'-ERR') !== false));
         if ($failed) error_log('School Bells Event Socket response: '.substr((string)$reply, 0, 240));
-        sb3_finish_slot($db,$school_bell,$local,$failed?'request_error':'submitted',$failed?'Event socket rejected or failed':'FreeSWITCH request submitted; playback not verified');
+        sb3_finish_slot($database,$school_bell,$local,$failed?'request_error':'submitted',$failed?'Event socket rejected or failed':'FreeSWITCH request submitted; playback not verified');
     } catch (Throwable $e) {
-        sb3_finish_slot($db,$school_bell,$local,'request_error','Event socket request threw an error');
+        sb3_finish_slot($database,$school_bell,$local,'request_error','Event socket request threw an error');
         error_log('School Bells originate failed: '.$e->getMessage());
     }
 }
