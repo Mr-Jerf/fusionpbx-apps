@@ -389,7 +389,7 @@ foreach ($result as $row) {
 <input type="hidden" name="id" value="">
 </form>
 <script>
-
+(function() {
 	var rows = document.querySelectorAll('.school-bell-row');
 	var actionBar = document.getElementById('school-bell-selection-actions');
 	var selectAll = document.getElementById('school-bell-select-all');
