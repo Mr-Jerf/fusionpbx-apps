@@ -89,10 +89,9 @@ if (!is_array($school_bells) || count($school_bells) === 0) {
 $event_socket_ip = $_SESSION['event_socket_ip_address'] ?? null;
 $event_socket_port = $_SESSION['event_socket_port'] ?? null;
 $event_socket_password = $_SESSION['event_socket_password'] ?? null;
-if ((!$event_socket_ip || !$event_socket_port || $event_socket_password === null) && isset($db) && $db instanceof PDO) {
+if ((!$event_socket_ip || !$event_socket_port || $event_socket_password === null) && isset($database)) {
     try {
-        $settings_stmt = $db->query("SELECT event_socket_ip_address,event_socket_port,event_socket_password FROM v_settings LIMIT 1");
-        $settings = $settings_stmt ? $settings_stmt->fetch(PDO::FETCH_ASSOC) : false;
+        $settings = $database->select("SELECT event_socket_ip_address,event_socket_port,event_socket_password FROM v_settings LIMIT 1", null, 'row');
         if (is_array($settings)) {
             $event_socket_ip = $event_socket_ip ?: $settings['event_socket_ip_address'];
             $event_socket_port = $event_socket_port ?: $settings['event_socket_port'];
