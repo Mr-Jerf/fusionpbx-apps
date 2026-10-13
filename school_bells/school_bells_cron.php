@@ -86,10 +86,27 @@ if (!is_array($school_bells) || count($school_bells) === 0) {
 	return;
 }
 
+$event_socket_ip = $_SESSION['event_socket_ip_address'] ?? null;
+$event_socket_port = $_SESSION['event_socket_port'] ?? null;
+$event_socket_password = $_SESSION['event_socket_password'] ?? null;
+if ((!$event_socket_ip || !$event_socket_port || $event_socket_password === null) && isset($db) && $db instanceof PDO) {
+    try {
+        $settings_stmt = $db->query("SELECT event_socket_ip_address,event_socket_port,event_socket_password FROM v_settings LIMIT 1");
+        $settings = $settings_stmt ? $settings_stmt->fetch(PDO::FETCH_ASSOC) : false;
+        if (is_array($settings)) {
+            $event_socket_ip = $event_socket_ip ?: $settings['event_socket_ip_address'];
+            $event_socket_port = $event_socket_port ?: $settings['event_socket_port'];
+            if ($event_socket_password === null) $event_socket_password = $settings['event_socket_password'];
+        }
+    } catch (Throwable $e) {
+        error_log('School Bells could not load Event Socket settings: '.$e->getMessage());
+    }
+}
+
 $freeswitch_event_socket = event_socket_create(
-	$_SESSION['event_socket_ip_address'],
-	$_SESSION['event_socket_port'],
-	$_SESSION['event_socket_password']
+	$event_socket_ip,
+	$event_socket_port,
+	$event_socket_password
 );
 
 if (!$freeswitch_event_socket) {
